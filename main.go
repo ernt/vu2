@@ -4,29 +4,27 @@ import (
 	"fmt"
 	"log"
 	"os"
+	"os/exec"
 	"regexp"
 	"strings"
 	"time"
 
+	"github.com/chzyer/readline"
+	"github.com/peterh/liner"
+
 	"golang.org/x/crypto/ssh"
+	"golang.org/x/text/encoding/charmap"
 )
 
 func main() {
 	host := "10.50.100.81:31022"
+	//host := "11.50.0.45:22"
 	usuario := "ermunoz"
 	//usuario := "ezurita"
 	password := "LQKZgq0r$2"
 	//password := "ERC$51aecw$518"
 	// --------------------------------------------------
-
-	if len(os.Args) < 2 {
-		fmt.Println("❌ Error: Debes enviar un comando.")
-		fmt.Println("💡 Uso: ./wrapper \"LIST VOC\"")
-		os.Exit(1)
-	}
-
 	fmt.Printf("🔌 Conectando a %s...\n", host)
-
 	// 1. Configuración de SSH interactivo
 	authInteractive := ssh.KeyboardInteractive(
 		func(user, instruction string, questions []string, echos []bool) ([]string, error) {
@@ -87,7 +85,8 @@ func main() {
 		for {
 			n, err := stdout.Read(buf)
 			if n > 0 {
-				chunk := string(buf[:n])
+				bytesDecodificados, _ := charmap.ISO8859_1.NewDecoder().Bytes(buf[:n])
+				chunk := string(bytesDecodificados)
 
 				// --- LÍNEA MÁGICA DE DEPURACIÓN ---
 				chunkLimpio := ansiRegex.ReplaceAllString(chunk, "")
@@ -128,7 +127,8 @@ func main() {
 			break
 		}
 		if n > 0 {
-			pantalla := ansiRegex.ReplaceAllString(string(buf[:n]), "")
+			bytesDecodificados, _ := charmap.ISO8859_1.NewDecoder().Bytes(buf[:n])
+			pantalla := ansiRegex.ReplaceAllString(string(bytesDecodificados), "")
 
 			if strings.TrimSpace(pantalla) != "" {
 				fmt.Printf("[LEYENDO]: %s\n", pantalla)
@@ -136,7 +136,7 @@ func main() {
 
 			if strings.Contains(pantalla, "liberar? (S/N)") {
 				fmt.Println("⚠️ Liberando sesión colgada...")
-				stdin.Write([]byte("N\r"))
+				stdin.Write([]byte("S\r"))
 				time.Sleep(1 * time.Second)
 				continue
 			}
@@ -187,61 +187,157 @@ func main() {
 		log.Fatalf("Nunca llegué al prompt: %v", err)
 	}
 
-	fmt.Println("✅ ¡Prompt '>' alcanzado! Listo para ejecutar comandos.")
+	fmt.Println("✅ ¡Prompt '>' alcanzado! Listo para interactuar.")
+	fmt.Println("=======================================================")
+	fmt.Println("🔥 MODO INTERACTIVO ACTIVADO. Escribe 'EXIT' para salir.")
+	fmt.Println("=======================================================")
 
-	// --- FASE DE EJECUCIÓN (USANDO PSICOLOGÍA INVERSA) ---
-	comandoCompleto := strings.Join(os.Args[1:], " ")
+	// Creamos un lector para escuchar tu teclado local en tiempo real
+	rl, err := readline.NewEx(&readline.Config{
+		Prompt:          "UniVerse > ",
+		HistoryFile:     "/tmp/universe_historial.txt", // 🔥 Magia: Guarda todo en tu disco duro
+		InterruptPrompt: "^C",
+		EOFPrompt:       "EXIT",
+	})
+	if err != nil {
+		log.Fatalf("Fallo al iniciar el lector de teclado: %v", err)
+	}
+	defer rl.Close()
+	stdin.Write([]byte("term ,32767\r"))
 
-	// 1. Lo que deseamos que se ejecute (en MAYÚSCULAS)
-	comandoDeseado := strings.ToUpper(comandoCompleto)
-
-	// 2. Lo que mandamos (en MINÚSCULAS) para que UniVerse lo invierta
-	comandoInvertido := strings.ToLower(comandoCompleto)
-
-	fmt.Printf("🚀 Ejecutando (enviado invertido): %s\n", comandoDeseado)
-
-	// Inyectamos el comando en minúsculas
-	stdin.Write([]byte(comandoInvertido + "\r"))
-
-	// Capturamos la respuesta hasta que vuelva a salir el prompt ">"
-	var capturaFinal strings.Builder
+	// Esperamos a que nos devuelva el prompt para confirmar que lo aceptó
+	if err := esperarHasta(">"); err != nil {
+		log.Fatalf("Fallo al apagar la paginación: %v", err)
+	}
+	// --- BUCLE INTERACTIVO ---
 	for {
-		n, err := stdout.Read(buf)
-		if n > 0 {
-			chunk := string(buf[:n])
-			capturaFinal.WriteString(chunk)
-			textoActual := capturaFinal.String()
+		entradaUsuario, err := rl.Readline()
+		if err != nil {
+			if err == liner.ErrPromptAborted {
+				fmt.Println("\nSaliendo por Ctrl+C...")
+			} else {
+				fmt.Printf("\n❌ Error de Terminal Local: %v\n", err)
+				fmt.Println("💡 CONSEJO: La librería 'liner' (flechas de historial) requiere una terminal real.")
+				fmt.Println("👉 No uses el botón 'Play' verde de GoLand. Abre una ventana de terminal, compila y ejecuta './vu2'")
+			}
+			break // Rompemos el bucle
+		}
+		entradaUsuario = strings.TrimSpace(entradaUsuario)
 
-			textoEvaluacion := ansiRegex.ReplaceAllString(textoActual, "")
-			textoEvaluacion = strings.TrimRight(textoEvaluacion, " \r\n\t")
+		if entradaUsuario == "" {
+			continue
+		}
+		if strings.ToUpper(strings.TrimSpace(entradaUsuario)) == "EXIT" {
+			fmt.Println("Saliendo de UniVerse...")
+			break
+		}
 
-			if strings.HasSuffix(textoEvaluacion, ">") {
+		// 1. INTERCEPTOR DE COMANDOS MÁGICOS
+		abrirEnVSCode := false
+		comandoDeseado := entradaUsuario
+
+		// Si empieza con ".code ", activamos el modo editor y limpiamos el prefijo
+		editor := ".code "
+		//editor := ".antigravity"
+		if strings.HasPrefix(strings.ToLower(entradaUsuario), editor) {
+			abrirEnVSCode = true
+			// Extraemos el comando real (ej. "CT PGM2 LANZAPRIN")
+			comandoDeseado = strings.TrimSpace(entradaUsuario[6:])
+			fmt.Println("📦 Interceptado: Se abrirá en VS Code al terminar...")
+		}
+
+		// 2. Aplicamos el Truco Reverso (a minúsculas)
+		comandoInvertido := strings.ToLower(comandoDeseado)
+		comandoISO, _ := charmap.ISO8859_1.NewEncoder().String(comandoInvertido + "\r")
+		stdin.Write([]byte(comandoISO))
+
+		// 3. Capturamos la respuesta
+		var capturaFinal strings.Builder
+		for {
+			n, err := stdout.Read(buf)
+			if n > 0 {
+				bytesDecodificados, _ := charmap.ISO8859_1.NewDecoder().Bytes(buf[:n])
+				chunk := string(bytesDecodificados)
+				fmt.Printf("[RAYOS X] %q\n", chunk)
+				capturaFinal.WriteString(chunk)
+				textoActual := capturaFinal.String()
+
+				textoEvaluacion := ansiRegex.ReplaceAllString(textoActual, "")
+				textoEvaluacion = strings.TrimRight(textoEvaluacion, " \r\n\t")
+
+				if strings.HasSuffix(textoEvaluacion, ">") || strings.HasSuffix(textoEvaluacion, "::") {
+					break
+				}
+			}
+			if err != nil {
 				break
 			}
 		}
-		if err != nil {
-			break
+
+		// 4. Limpiamos la salida
+		textoLimpio := capturaFinal.String()
+		textoLimpio = ansiRegex.ReplaceAllString(textoLimpio, "")
+
+		comandoMayus := strings.ToUpper(comandoDeseado)
+		textoLimpio = strings.TrimPrefix(textoLimpio, comandoMayus+"\r\n")
+		textoLimpio = strings.TrimPrefix(textoLimpio, comandoMayus+"\r")
+		textoLimpio = strings.TrimPrefix(textoLimpio, comandoMayus)
+		textoLimpio = strings.TrimSuffix(textoLimpio, ">")
+		textoLimpio = strings.TrimSpace(textoLimpio)
+
+		// 5. ¡LA MAGIA DE LA REDIRECCIÓN LOCAL!
+		if abrirEnVSCode {
+			codigoLimpio := textoLimpio
+
+			// A. Encontrar dónde empieza el código real
+			// Buscamos la primera vez que aparecen 4 números seguidos de un espacio al inicio de una línea
+			reInicio := regexp.MustCompile(`(?m)^\d{4} `)
+			indiceInicio := reInicio.FindStringIndex(codigoLimpio)
+			if indiceInicio != nil {
+				// Cortamos y tiramos a la basura todo lo que haya ANTES del primer "0001 "
+				codigoLimpio = codigoLimpio[indiceInicio[0]:]
+			}
+
+			// B. Reparar las líneas macheteadas (Wrap de 80 columnas)
+			// Cuando UniVerse corta una palabra, mete "\r\n" + 5 espacios. Lo reemplazamos por NADA para volver a unir la palabra (ej. C + INCO = CINCO)
+			reWrap := regexp.MustCompile(`\r\n {5}`)
+			codigoLimpio = reWrap.ReplaceAllString(codigoLimpio, "")
+
+			// C. Eliminar los números de línea (ej. "0001 ")
+			// Usamos la misma regla de arriba, pero ahora para borrarlos en todo el texto
+			codigoLimpio = reInicio.ReplaceAllString(codigoLimpio, "")
+
+			// D. Limpiar el prompt final que pudiera quedar pegado
+			codigoLimpio = strings.TrimRight(codigoLimpio, ">\r\n ")
+
+			// Guardar y abrir
+			archivoTemp, err := os.CreateTemp("", "universe_*.bas") // .bas por UniBasic
+			if err != nil {
+				fmt.Println("❌ Error creando archivo temporal:", err)
+			} else {
+				archivoTemp.WriteString(codigoLimpio)
+				archivoTemp.Close()
+
+				cmd := exec.Command("code", archivoTemp.Name())
+				err = cmd.Start()
+				if err != nil {
+					fmt.Println("❌ Error al abrir VS Code:", err)
+				} else {
+					fmt.Printf("✅ Código limpio y abierto en VS Code (%s)\n", archivoTemp.Name())
+				}
+			}
+		} else {
+			// Si no usaste el comando mágico, solo imprimimos normal en la consola
+			fmt.Println(textoLimpio)
 		}
 	}
 
-	// Limpiamos la salida
-	textoLimpio := capturaFinal.String()
-	textoLimpio = ansiRegex.ReplaceAllString(textoLimpio, "")
-
-	// OJO: Como UniVerse lo invirtió, nos va a regresar el texto en MAYÚSCULAS.
-	// Por eso le decimos a Go que borre 'comandoDeseado' y no el invertido.
-	textoLimpio = strings.TrimPrefix(textoLimpio, comandoDeseado+"\r\n")
-	textoLimpio = strings.TrimPrefix(textoLimpio, comandoDeseado+"\r")
-	textoLimpio = strings.TrimPrefix(textoLimpio, comandoDeseado)
-	textoLimpio = strings.TrimSuffix(textoLimpio, ">")
-	textoLimpio = strings.TrimSpace(textoLimpio)
-
-	// Salimos de UniVerse y Bash
+	// --- FASE DE CIERRE ---
+	// Salimos de UniVerse y Bash solo cuando escribas EXIT
 	stdin.Write([]byte("QUIT\r"))
-	time.Sleep(500 * time.Millisecond) // Pequeña pausa para que alcance a cerrar
+	time.Sleep(500 * time.Millisecond)
 	stdin.Write([]byte("exit\r"))
 
-	fmt.Println("\n================ RESPUESTA DE UNIVERSE ================")
-	fmt.Println(textoLimpio)
-	fmt.Println("=======================================================")
+	fmt.Println("🔌 Conexión finalizada limpiamente.")
+
 }
