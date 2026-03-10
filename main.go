@@ -24,7 +24,6 @@ func main() {
 		fmt.Println("💡 Uso: ./wrapper \"LIST VOC\"")
 		os.Exit(1)
 	}
-	comandoUsuario := os.Args[1]
 
 	fmt.Printf("🔌 Conectando a %s...\n", host)
 
@@ -68,8 +67,9 @@ func main() {
 		ssh.TTY_OP_OSPEED: 14400,
 		ssh.VERASE:        127,
 		ssh.VKILL:         21,
+		ssh.IUCLC:         0,
 	}
-	if err := session.RequestPty("vt100", 80, 40, modes); err != nil {
+	if err := session.RequestPty("xterm", 80, 40, modes); err != nil {
 		log.Fatalf("Fallo pedir PTY: %v", err)
 	}
 
@@ -90,7 +90,6 @@ func main() {
 				chunk := string(buf[:n])
 
 				// --- LÍNEA MÁGICA DE DEPURACIÓN ---
-				// Esto imprimirá en tu pantalla EXACTAMENTE lo que manda el servidor
 				chunkLimpio := ansiRegex.ReplaceAllString(chunk, "")
 				fmt.Printf("\n[DEBUG] Recibido del servidor: %q\n", chunkLimpio)
 				// ----------------------------------
@@ -106,28 +105,23 @@ func main() {
 	}
 
 	// --- FASE DE NAVEGACIÓN ---
-
-	// --- FASE DE NAVEGACIÓN ---
-
 	fmt.Println("⏳ Esperando el prompt de Linux...")
 	if err := esperarHasta("$ "); err != nil {
 		log.Fatalf("No encontré el prompt de Linux: %v", err)
 	}
 
 	fmt.Println("🖥️ ¡Estamos en Bash! Llamando al entorno...")
-	// Aquí asumo que dejaste el comando que disparó el menú (ej. "uv\r" o tu script de perfil)
-	stdin.Write([]byte("stty erase ^H && source ~/.bash_profile && uv\r"))
+	stdin.Write([]byte("source ~/.bash_profile && stty erase ^H -iuclc && uv\r"))
 
 	fmt.Println("⏳ Esperando el menú de SISE...")
-	// Le decimos a Go que atrape el menú exacto que vimos en el debug
 	if err := esperarHasta("Elija la Opcion"); err != nil {
 		log.Fatalf("No encontré el menú de SISE: %v", err)
 	}
 
 	fmt.Println("👉 Seleccionando opción 3 (PERU)...")
-	// Enviamos el número 1 y un Enter
 	stdin.Write([]byte("3\r"))
-	// Bucle inteligente que reacciona a la pantalla (Versión 3.0)
+
+	// Bucle inteligente que reacciona a la pantalla
 	for {
 		n, err := stdout.Read(buf)
 		if err != nil {
@@ -137,18 +131,16 @@ func main() {
 			pantalla := ansiRegex.ReplaceAllString(string(buf[:n]), "")
 
 			if strings.TrimSpace(pantalla) != "" {
-				// Puedes comentar esta línea después si no quieres ver el log en tu terminal final
 				fmt.Printf("[LEYENDO]: %s\n", pantalla)
 			}
 
 			if strings.Contains(pantalla, "liberar? (S/N)") {
 				fmt.Println("⚠️ Liberando sesión colgada...")
-				stdin.Write([]byte("S\r"))
+				stdin.Write([]byte("N\r"))
 				time.Sleep(1 * time.Second)
 				continue
 			}
 
-			// REACCIÓN 5: Elegir qué sesión matar (La que agregamos antes)
 			if strings.Contains(pantalla, "SESION a Liberar") {
 				fmt.Println("🗡️ Matando la sesión colgada (Línea 1)...")
 				stdin.Write([]byte("1\r"))
@@ -158,33 +150,29 @@ func main() {
 				continue
 			}
 
-			// ¡ATENCIÓN! REACCIÓN 3 MOVIDA ARRIBA: Pide Contraseña
 			if strings.Contains(pantalla, "Password") {
 				fmt.Println("👉 Enviando Contraseña...")
 				passLimpio := "Arcangel3#"
-				//passLimpio := "Zura#2021"
 				fmt.Printf("[DEBUG INTERNO] Se enviará exactamente: %q\n", passLimpio)
 				stdin.Write([]byte(passLimpio + "\r"))
 				time.Sleep(1 * time.Second)
 				continue
 			}
 
-			// REACCIÓN 2 AHORA ABAJO: Pide Usuario
 			if strings.Contains(pantalla, "Codigo de Usuario") {
 				fmt.Println("👉 Enviando Usuario...")
 				stdin.Write([]byte("ERMUNOZ\r"))
-				//stdin.Write([]byte("EZURITA\r"))
 				time.Sleep(1 * time.Second)
 				continue
 			}
 
-			// REACCIÓN 4: ¡MENÚ PRINCIPAL! (El escape hacia la consola)
 			if strings.Contains(pantalla, "(F) para salir") || strings.Contains(pantalla, "Seleccione la Opcion") {
 				fmt.Println("✅ ¡Menú alcanzado! Saliendo con 'F' hacia el prompt TCL...")
 				stdin.Write([]byte("F\r"))
 				time.Sleep(1 * time.Second)
-				break // ¡Rompemos el bucle! Ya terminamos el login y la navegación.
+				break
 			}
+
 			if strings.Contains(pantalla, "No existe la opcion") {
 				fmt.Println("Pasando session")
 				stdin.Write([]byte("\n\r"))
@@ -201,17 +189,19 @@ func main() {
 
 	fmt.Println("✅ ¡Prompt '>' alcanzado! Listo para ejecutar comandos.")
 
-	// BORRAMOS EL BLOQUE QUE ENVIABA "QUIT" AQUÍ.
-	// Ya no es necesario porque la "F" del menú ya nos dejó en el prompt.
-
-	// --- FASE DE EJECUCIÓN ---
-	fmt.Printf("🚀 Ejecutando: %s\n", comandoUsuario)
-
-	// Como pasas el comando por argumentos en GoLand, unimos todo el arreglo
-	// En caso de que se haya separado por espacios.
+	// --- FASE DE EJECUCIÓN (USANDO PSICOLOGÍA INVERSA) ---
 	comandoCompleto := strings.Join(os.Args[1:], " ")
-	mayus := strings.ToUpper(comandoCompleto)
-	stdin.Write([]byte(mayus + "\r"))
+
+	// 1. Lo que deseamos que se ejecute (en MAYÚSCULAS)
+	comandoDeseado := strings.ToUpper(comandoCompleto)
+
+	// 2. Lo que mandamos (en MINÚSCULAS) para que UniVerse lo invierta
+	comandoInvertido := strings.ToLower(comandoCompleto)
+
+	fmt.Printf("🚀 Ejecutando (enviado invertido): %s\n", comandoDeseado)
+
+	// Inyectamos el comando en minúsculas
+	stdin.Write([]byte(comandoInvertido + "\r"))
 
 	// Capturamos la respuesta hasta que vuelva a salir el prompt ">"
 	var capturaFinal strings.Builder
@@ -222,14 +212,9 @@ func main() {
 			capturaFinal.WriteString(chunk)
 			textoActual := capturaFinal.String()
 
-			// 2. Le quitamos la basura (colores ANSI) solo para evaluar
 			textoEvaluacion := ansiRegex.ReplaceAllString(textoActual, "")
-
-			// 3. Le podamos todos los espacios, saltos de línea y retornos del final
 			textoEvaluacion = strings.TrimRight(textoEvaluacion, " \r\n\t")
 
-			// 4. Como le quitamos todo lo del final, si es el prompt, obligatoriamente terminará en ">"
-			// Esto cubre tanto ">" normal como el ">>" de las listas.
 			if strings.HasSuffix(textoEvaluacion, ">") {
 				break
 			}
@@ -242,14 +227,18 @@ func main() {
 	// Limpiamos la salida
 	textoLimpio := capturaFinal.String()
 	textoLimpio = ansiRegex.ReplaceAllString(textoLimpio, "")
-	textoLimpio = strings.TrimPrefix(textoLimpio, mayus+"\r\n")
-	textoLimpio = strings.TrimPrefix(textoLimpio, mayus+"\r")
-	textoLimpio = strings.TrimPrefix(textoLimpio, mayus)
+
+	// OJO: Como UniVerse lo invirtió, nos va a regresar el texto en MAYÚSCULAS.
+	// Por eso le decimos a Go que borre 'comandoDeseado' y no el invertido.
+	textoLimpio = strings.TrimPrefix(textoLimpio, comandoDeseado+"\r\n")
+	textoLimpio = strings.TrimPrefix(textoLimpio, comandoDeseado+"\r")
+	textoLimpio = strings.TrimPrefix(textoLimpio, comandoDeseado)
 	textoLimpio = strings.TrimSuffix(textoLimpio, ">")
 	textoLimpio = strings.TrimSpace(textoLimpio)
 
-	// Salimos de UniVerse y Bash (ESTOS QUITS SÍ SE QUEDAN)
+	// Salimos de UniVerse y Bash
 	stdin.Write([]byte("QUIT\r"))
+	time.Sleep(500 * time.Millisecond) // Pequeña pausa para que alcance a cerrar
 	stdin.Write([]byte("exit\r"))
 
 	fmt.Println("\n================ RESPUESTA DE UNIVERSE ================")
