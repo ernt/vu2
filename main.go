@@ -2,6 +2,7 @@ package main
 
 import (
 	"fmt"
+	"io"
 	"log"
 	"os"
 	"os/exec"
@@ -10,7 +11,6 @@ import (
 	"time"
 
 	"github.com/chzyer/readline"
-	"github.com/peterh/liner"
 
 	"golang.org/x/crypto/ssh"
 	"golang.org/x/text/encoding/charmap"
@@ -136,7 +136,7 @@ func main() {
 
 			if strings.Contains(pantalla, "liberar? (S/N)") {
 				fmt.Println("⚠️ Liberando sesión colgada...")
-				stdin.Write([]byte("S\r"))
+				stdin.Write([]byte("N\r"))
 				time.Sleep(1 * time.Second)
 				continue
 			}
@@ -213,12 +213,15 @@ func main() {
 	for {
 		entradaUsuario, err := rl.Readline()
 		if err != nil {
-			if err == liner.ErrPromptAborted {
+			// Detectamos si el usuario presionó Ctrl+C
+			if err == readline.ErrInterrupt {
 				fmt.Println("\nSaliendo por Ctrl+C...")
+				// Detectamos si el usuario presionó Ctrl+D o cerró la terminal
+			} else if err == io.EOF {
+				fmt.Println("\nSaliendo por fin de archivo (EOF)...")
 			} else {
 				fmt.Printf("\n❌ Error de Terminal Local: %v\n", err)
-				fmt.Println("💡 CONSEJO: La librería 'liner' (flechas de historial) requiere una terminal real.")
-				fmt.Println("👉 No uses el botón 'Play' verde de GoLand. Abre una ventana de terminal, compila y ejecuta './vu2'")
+				fmt.Println("👉 Recuerda ejecutar tu programa en una terminal real, no en el IDE.")
 			}
 			break // Rompemos el bucle
 		}
